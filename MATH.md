@@ -1,5 +1,6 @@
 # Math behind the fake-3D tiled floor
 
+
 > **Note:** the live renderer has since moved to a per-scanline Mode 7
 > sampler (`src/mode7.js`) to support a moving/driving camera — see
 > `src/kart.js` and `src/main.js`. This document describes the original
