@@ -1,0 +1,297 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Raycast kart racer (Doom-style corridor)</title>
+    <style>
+      html, body { margin: 0; background: #222; color: #ccc; font-family: sans-serif; }
+      #canvas { display: block; margin: 20px auto; background: #000; }
+      #hint, #nav { text-align: center; }
+      #nav a { color: #6ab0ff; margin: 0 8px; }
+      #wrap { position: relative; width: 800px; margin: 20px auto; }
+      #wrap canvas#canvas { margin: 0; }
+      #minimap { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.5); }
+    </style>
+  </head>
+  <body onload="init();">
+    <p id="nav">
+      <a href="index.html">mode 7 kart racer</a> ·
+      <a href="chessboard.html">rotable chessboard prototype</a> ·
+      <span>raycast corridor (this page)</span>
+    </p>
+    <div id="wrap">
+      <canvas id="canvas" width="800" height="600">No ando</canvas>
+      <canvas id="minimap" width="140" height="140"></canvas>
+    </div>
+    <p id="hint">Arrows/WASD to drive — same ellipse track as the mode 7 version, but walked as a walled corridor and rendered with a Doom-style per-column raycaster instead of a ground-plane raster.</p>
+    <script>
+      // Same ellipse road as track.ts (see MATH.md), but here the road/curb
+      // boundary is rasterized once into a coarse wall grid and driven as a
+      // walled corridor: classic per-column DDA raycasting (Wolfenstein/Doom
+      // style) instead of mode7's per-scanline ground-plane raster.
+      var MAP_W = 1024, MAP_H = 1024;
+      var CX = MAP_W / 2, CY = MAP_H / 2;
+      var RX = MAP_W * 0.32, RY = MAP_H * 0.32;
+      var ROAD_WIDTH = 160, CURB_WIDTH = ROAD_WIDTH + 24;
+      var AVG_R = (RX + RY) / 2;
+
+      var CELL = 16; // world units per grid cell
+      var GRID = Math.floor(MAP_W / CELL); // 64x64
+      var wallGrid; // Uint8Array, 1 = wall, 0 = open road
+
+      var FOV = Math.PI / 3; // 60 degrees
+      var MAX_DIST = 26; // cells, for distance fog
+      var WALL_SCALE = 0.9; // tunable, like FOCAL in the mode7 version
+
+      var FIELD_COLOR = [0x3a, 0x7d, 0x3a];
+      var CURB_COLOR = [0x4a, 0x4a, 0x4a];
+      var SKY_COLOR = [0x87, 0xce, 0xeb];
+
+      var TILE_SIZE = 48; // world units per texture repeat
+      var tilePixels, tileW = 0, tileH = 0, tileReady = false;
+
+      var canvas, ctx, imageData, W, H;
+      var mini, mctx;
+
+      var kart = { x: 0, y: 0, heading: 0, speed: 0 };
+      var keys = {};
+      var lastTime = 0, fps = 0, fpsAccum = 0, fpsFrames = 0;
+
+      var ACCEL = 420, BRAKE = 560, MAX_SPEED = 300, MAX_REVERSE = 160;
+      var STEER = 2.6, STEER_REF_SPEED = 80, FRICTION = 0.98;
+      var KART_RADIUS = 10; // world units, for wall collision
+
+      function buildWallGrid() {
+        wallGrid = new Uint8Array(GRID * GRID);
+        for (var j = 0; j < GRID; j++) {
+          for (var i = 0; i < GRID; i++) {
+            if (i === 0 || j === 0 || i === GRID - 1 || j === GRID - 1) {
+              wallGrid[j * GRID + i] = 1;
+              continue;
+            }
+            var wx = i * CELL + CELL / 2;
+            var wy = j * CELL + CELL / 2;
+            wallGrid[j * GRID + i] = isRoad(wx, wy) ? 0 : 1;
+          }
+        }
+      }
+
+      function isRoad(wx, wy) {
+        var dx = wx - CX, dy = wy - CY;
+        var r = Math.sqrt((dx / RX) * (dx / RX) + (dy / RY) * (dy / RY));
+        return Math.abs(r - 1) * AVG_R <= CURB_WIDTH / 2;
+      }
+
+      function cellAt(wx, wy) {
+        var i = Math.floor(wx / CELL), j = Math.floor(wy / CELL);
+        if (i < 0 || j < 0 || i >= GRID || j >= GRID) return 1;
+        return wallGrid[j * GRID + i];
+      }
+
+      function isWallNear(wx, wy) {
+        return cellAt(wx - KART_RADIUS, wy) || cellAt(wx + KART_RADIUS, wy) ||
+               cellAt(wx, wy - KART_RADIUS) || cellAt(wx, wy + KART_RADIUS);
+      }
+
+      function init() {
+        canvas = document.getElementById('canvas');
+        ctx = canvas.getContext('2d');
+        W = canvas.width; H = canvas.height;
+        imageData = ctx.createImageData(W, H);
+
+        mini = document.getElementById('minimap');
+        mctx = mini.getContext('2d');
+
+        buildWallGrid();
+        loadTile();
+
+        kart.x = CX;
+        kart.y = CY - RY;
+        kart.heading = 0;
+        kart.speed = 0;
+
+        window.addEventListener('keydown', function (e) { keys[e.key.toLowerCase()] = true; });
+        window.addEventListener('keyup', function (e) { keys[e.key.toLowerCase()] = false; });
+
+        requestAnimationFrame(frame);
+      }
+
+      function loadTile() {
+        var img = new Image();
+        img.onload = function () {
+          var off = document.createElement('canvas');
+          off.width = img.width; off.height = img.height;
+          var octx = off.getContext('2d');
+          octx.drawImage(img, 0, 0);
+          tilePixels = octx.getImageData(0, 0, img.width, img.height).data;
+          tileW = img.width; tileH = img.height;
+          tileReady = true;
+        };
+        img.src = 'assets/tile.webp';
+      }
+
+      function input(name) {
+        if (name === 'up') return keys['arrowup'] || keys['w'];
+        if (name === 'down') return keys['arrowdown'] || keys['s'];
+        if (name === 'left') return keys['arrowleft'] || keys['a'];
+        if (name === 'right') return keys['arrowright'] || keys['d'];
+        return false;
+      }
+
+      function updateKart(dt) {
+        if (input('up')) kart.speed += ACCEL * dt;
+        if (input('down')) kart.speed -= BRAKE * dt;
+
+        kart.speed *= Math.pow(FRICTION, dt * 60);
+        if (Math.abs(kart.speed) < 0.5) kart.speed = 0;
+        if (kart.speed > MAX_SPEED) kart.speed = MAX_SPEED;
+        if (kart.speed < -MAX_REVERSE) kart.speed = -MAX_REVERSE;
+
+        var steerScale = Math.min(Math.abs(kart.speed) / STEER_REF_SPEED, 1);
+        var steerDir = kart.speed < 0 ? -1 : 1;
+        if (input('left')) kart.heading -= STEER * dt * steerScale * steerDir;
+        if (input('right')) kart.heading += STEER * dt * steerScale * steerDir;
+
+        var nx = kart.x + Math.cos(kart.heading) * kart.speed * dt;
+        var ny = kart.y + Math.sin(kart.heading) * kart.speed * dt;
+
+        // Axis-separated collision so the kart slides along walls instead of
+        // sticking dead the instant one component would clip through.
+        if (!isWallNear(nx, kart.y)) kart.x = nx; else kart.speed *= 0.5;
+        if (!isWallNear(kart.x, ny)) kart.y = ny; else kart.speed *= 0.5;
+      }
+
+      // Classic grid-DDA raycaster (Lodev/Wolfenstein style): walk the ray
+      // cell-by-cell along whichever axis is closer, so cost is O(cells
+      // crossed) instead of marching in fixed small steps.
+      function castRay(rayAngle) {
+        var rayDirX = Math.cos(rayAngle), rayDirY = Math.sin(rayAngle);
+        var posX = kart.x / CELL, posY = kart.y / CELL;
+        var mapX = Math.floor(posX), mapY = Math.floor(posY);
+
+        var deltaDistX = rayDirX === 0 ? 1e30 : Math.abs(1 / rayDirX);
+        var deltaDistY = rayDirY === 0 ? 1e30 : Math.abs(1 / rayDirY);
+
+        var stepX, stepY, sideDistX, sideDistY;
+        if (rayDirX < 0) { stepX = -1; sideDistX = (posX - mapX) * deltaDistX; }
+        else { stepX = 1; sideDistX = (mapX + 1 - posX) * deltaDistX; }
+        if (rayDirY < 0) { stepY = -1; sideDistY = (posY - mapY) * deltaDistY; }
+        else { stepY = 1; sideDistY = (mapY + 1 - posY) * deltaDistY; }
+
+        var side = 0, hit = false, guard = 0;
+        while (!hit && guard++ < GRID * 2) {
+          if (sideDistX < sideDistY) { sideDistX += deltaDistX; mapX += stepX; side = 0; }
+          else { sideDistY += deltaDistY; mapY += stepY; side = 1; }
+          if (mapX < 0 || mapY < 0 || mapX >= GRID || mapY >= GRID) { hit = true; break; }
+          if (wallGrid[mapY * GRID + mapX]) hit = true;
+        }
+
+        var rawDist = side === 0
+          ? (sideDistX - deltaDistX)
+          : (sideDistY - deltaDistY);
+        // Fisheye correction: rawDist is along the ray, we need the distance
+        // projected onto the camera's forward axis.
+        var perpDist = Math.max(rawDist * Math.cos(rayAngle - kart.heading), 1e-4);
+        return { dist: perpDist, side: side };
+      }
+
+      function render() {
+        var data = imageData.data;
+        var horizonY = H / 2;
+
+        for (var x = 0; x < W; x++) {
+          var rayAngle = kart.heading - FOV / 2 + (x / (W - 1)) * FOV;
+          var dirX = Math.cos(rayAngle), dirY = Math.sin(rayAngle);
+          var fisheye = Math.cos(rayAngle - kart.heading);
+          var r = castRay(rayAngle);
+          var lineHeight = Math.floor((H * WALL_SCALE) / r.dist);
+          var drawStart = Math.max(0, Math.floor(horizonY - lineHeight / 2));
+          var drawEnd = Math.min(H - 1, Math.floor(horizonY + lineHeight / 2));
+
+          var fog = Math.max(0, Math.min(1, 1 - r.dist / MAX_DIST));
+          var shade = (r.side === 1 ? 0.7 : 1.0) * (0.35 + 0.65 * fog);
+
+          for (var y = 0; y < H; y++) {
+            var idx = (y * W + x) * 4;
+            var cr, cg, cb;
+            if (y < drawStart) {
+              cr = SKY_COLOR[0]; cg = SKY_COLOR[1]; cb = SKY_COLOR[2];
+            } else if (y > drawEnd) {
+              // Floor casting (Lodev-style): invert the same H*WALL_SCALE/dist
+              // projection used for walls to get the perpendicular distance of
+              // this row, undo the fisheye correction to get distance along
+              // this column's own ray, then step to a world position and
+              // sample the tile texture there.
+              var perpDist = (H * WALL_SCALE) / (2 * (y - horizonY));
+              var rowDist = perpDist / fisheye;
+              var floorFog = Math.max(0.25, Math.min(1, 1 - rowDist / MAX_DIST));
+              if (tileReady) {
+                var wx = kart.x + dirX * rowDist * CELL;
+                var wy = kart.y + dirY * rowDist * CELL;
+                var tu = (wx / TILE_SIZE) * tileW;
+                var tv = (wy / TILE_SIZE) * tileH;
+                var tx = Math.floor(tu) % tileW; if (tx < 0) tx += tileW;
+                var ty = Math.floor(tv) % tileH; if (ty < 0) ty += tileH;
+                var tIdx = (ty * tileW + tx) * 4;
+                cr = tilePixels[tIdx] * floorFog;
+                cg = tilePixels[tIdx + 1] * floorFog;
+                cb = tilePixels[tIdx + 2] * floorFog;
+              } else {
+                cr = FIELD_COLOR[0] * floorFog; cg = FIELD_COLOR[1] * floorFog; cb = FIELD_COLOR[2] * floorFog;
+              }
+            } else {
+              cr = CURB_COLOR[0] * shade; cg = CURB_COLOR[1] * shade; cb = CURB_COLOR[2] * shade;
+            }
+            data[idx] = cr; data[idx + 1] = cg; data[idx + 2] = cb; data[idx + 3] = 255;
+          }
+        }
+        ctx.putImageData(imageData, 0, 0);
+      }
+
+      function drawHud(dt) {
+        if (dt > 0) {
+          fpsAccum += dt; fpsFrames++;
+          if (fpsAccum >= 0.5) { fps = Math.round(fpsFrames / fpsAccum); fpsAccum = 0; fpsFrames = 0; }
+        }
+        ctx.font = '16px monospace';
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText('speed: ' + Math.round(kart.speed), 12, 12);
+        ctx.fillText('fps: ' + fps, 12, 32);
+      }
+
+      function drawMinimap() {
+        var s = mini.width / GRID;
+        mctx.clearRect(0, 0, mini.width, mini.height);
+        for (var j = 0; j < GRID; j++) {
+          for (var i = 0; i < GRID; i++) {
+            mctx.fillStyle = wallGrid[j * GRID + i] ? '#4a4a4a' : '#3a7d3a';
+            mctx.fillRect(i * s, j * s, s, s);
+          }
+        }
+        var px = (kart.x / CELL) * s, py = (kart.y / CELL) * s;
+        mctx.strokeStyle = '#ffcc00';
+        mctx.beginPath();
+        mctx.moveTo(px, py);
+        mctx.lineTo(px + Math.cos(kart.heading) * 10, py + Math.sin(kart.heading) * 10);
+        mctx.stroke();
+        mctx.fillStyle = '#ff3333';
+        mctx.beginPath();
+        mctx.arc(px, py, 2.5, 0, Math.PI * 2);
+        mctx.fill();
+      }
+
+      function frame(now) {
+        var dt = lastTime === 0 ? 0 : Math.min((now - lastTime) / 1000, 0.05);
+        lastTime = now;
+
+        updateKart(dt);
+        render();
+        drawHud(dt);
+        drawMinimap();
+
+        requestAnimationFrame(frame);
+      }
+    </script>
+  </body>
+</html>
