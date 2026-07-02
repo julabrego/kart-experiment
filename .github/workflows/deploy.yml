@@ -31,7 +31,7 @@ jobs:
       - name: Assemble site
         run: |
           mkdir -p _site
-          cp index.html chessboard.html _site/
+          cp index.html chessboard.html raycast.html _site/
           cp -r assets _site/assets
           cp -r dist _site/dist
 
