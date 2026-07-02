@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch",
-    "serve": "python3 -m http.server 8000"
+    "serve": "http-server -p 8000 -c-1 .",
+    "dev": "concurrently -k -n tsc,web \"tsc --watch --preserveWatchOutput\" \"http-server -p 8000 -c-1 .\""
   },
   "repository": {
     "type": "git",
@@ -21,6 +22,8 @@
   },
   "homepage": "https://github.com/julabrego/kart-experiment#readme",
   "devDependencies": {
+    "concurrently": "^10.0.3",
+    "http-server": "^14.1.1",
     "typescript": "^6.0.3"
   }
 }

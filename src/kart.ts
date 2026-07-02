@@ -43,8 +43,8 @@ export function updateKart(kart: Kart, input: Input, onRoad: boolean, dt: number
   // Steering: no effect while parked, scales up to full rate by STEER_REF_SPEED.
   const steerScale = Math.min(Math.abs(kart.speed) / STEER_REF_SPEED, 1);
   const steerDir = kart.speed < 0 ? -1 : 1; // reversing steers the opposite way
-  if (input.left) kart.heading -= STEER * dt * steerScale * steerDir;
-  if (input.right) kart.heading += STEER * dt * steerScale * steerDir;
+  if (input.left) kart.heading += STEER * dt * steerScale * steerDir;
+  if (input.right) kart.heading -= STEER * dt * steerScale * steerDir;
 
   // Integrate position — forward axis matches mode7.ts's (cos, sin).
   kart.x += Math.cos(kart.heading) * kart.speed * dt;
