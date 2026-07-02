@@ -1,5 +1,11 @@
 # Matemática detrás del suelo con tiles falso-3D
 
+> **Nota:** el renderer real ahora usa un muestreador Mode 7 por línea de
+> escaneo (`src/mode7.js`) para soportar una cámara que se mueve/maneja —
+> ver `src/kart.js` y `src/main.js`. Este documento describe el prototipo
+> original basado en homografía, que queda como referencia porque las ideas
+> de geometría proyectiva (§2) siguen aplicando igual.
+
 Sin WebGL. Sin escena 3D. Solo dos pasos matemáticos:
 
 1. **Proyección de esquinas** — convierte el estado de cámara (`yaw`,

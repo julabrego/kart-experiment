@@ -1,5 +1,11 @@
 # Math behind the fake-3D tiled floor
 
+> **Note:** the live renderer has since moved to a per-scanline Mode 7
+> sampler (`src/mode7.js`) to support a moving/driving camera — see
+> `src/kart.js` and `src/main.js`. This document describes the original
+> homography-based prototype, kept here for reference since the
+> projective-geometry ideas (§2) still apply.
+
 No WebGL. No 3D scene graph. Two math steps only:
 
 1. **Corner projection** — turn camera state (`yaw`, `pitch`, `dist`) into 4
