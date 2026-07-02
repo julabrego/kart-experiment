@@ -6,10 +6,12 @@
     <style>
       html, body { margin: 0; background: #222; color: #ccc; font-family: sans-serif; }
       #canvas { display: block; margin: 20px auto; background: #000; }
-      #hint { text-align: center; }
+      #hint, #nav { text-align: center; }
+      #nav a { color: #6ab0ff; }
     </style>
   </head>
   <body>
+    <p id="nav"><a href="chessboard.html">see the older rotable-chessboard prototype &rarr;</a></p>
     <canvas id="canvas" width="800" height="600">No ando</canvas>
     <p id="hint">Arrows/WASD to drive — accelerate, brake/reverse, steer</p>
     <script type="module" src="dist/main.js"></script>
